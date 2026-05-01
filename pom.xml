@@ -171,6 +171,7 @@ LICENSE file.
     <module>cockroachdb</module>
     <module>jdbc</module>
     <module>mongodb</module>
+    <module>znstx</module>
   </modules>
 
   <build>
