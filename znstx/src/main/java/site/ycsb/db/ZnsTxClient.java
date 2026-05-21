@@ -31,6 +31,8 @@ public class ZnsTxClient extends DB {
   private static final String PROP_ISOLATION = "znstx.isolation";
   private static final String PROP_DURABILITY = "znstx.durability";
   private static final String PROP_RECOVERY = "znstx.recovery";
+  private static final String PROP_NODE_CHECKPOINT = "znstx.checkpoint";
+  private static final String PROP_PERIODIC_GC = "znstx.gc";
   private static final String PROP_READ_BUFFER_BYTES = "znstx.readbuffer.bytes";
 
   private static final int DEFAULT_READ_BUFFER_BYTES = 64 * 1024;
@@ -52,7 +54,8 @@ public class ZnsTxClient extends DB {
     System.loadLibrary("zns_tx_jni");
   }
 
-  private static native int nativeInitTx(int isolationLevel, int durabilityLevel, boolean enableRecovery);
+  private static native int nativeInitTx(int isolationLevel, int durabilityLevel, boolean enableRecovery,
+      boolean enableNodeCheckpointing, boolean enablePeriodicGc);
   private static native void nativeCleanTx();
   private static native int nativeBeginTx();
   private static native int nativeEndTx();
@@ -94,11 +97,15 @@ public class ZnsTxClient extends DB {
     int isolationLevel = parseIsolation(props.getProperty(PROP_ISOLATION, "si"));
     int durabilityLevel = parseDurability(props.getProperty(PROP_DURABILITY, "default"));
     boolean enableRecovery = Boolean.parseBoolean(props.getProperty(PROP_RECOVERY, "true"));
+    boolean enableNodeCheckpointing =
+        Boolean.parseBoolean(props.getProperty(PROP_NODE_CHECKPOINT, "false"));
+    boolean enablePeriodicGc = Boolean.parseBoolean(props.getProperty(PROP_PERIODIC_GC, "false"));
     readBufferBytes = parsePositiveInt(props.getProperty(PROP_READ_BUFFER_BYTES), DEFAULT_READ_BUFFER_BYTES);
 
     synchronized (INIT_LOCK) {
       if (!nativeInitialized) {
-        int rc = nativeInitTx(isolationLevel, durabilityLevel, enableRecovery);
+        int rc = nativeInitTx(isolationLevel, durabilityLevel, enableRecovery,
+            enableNodeCheckpointing, enablePeriodicGc);
         if (rc != 0) {
           throw new DBException("nativeInitTx failed with rc=" + rc);
         }
@@ -126,7 +133,7 @@ public class ZnsTxClient extends DB {
     String objKey = objectKey(table, key);
     try {
       byte[] raw = nativeGetObj(objKey, readBufferBytes);
-      nativeAbortTx(); // End the read-only transaction after the read
+      // nativeAbortTx(); // End the read-only transaction after the read
       if (raw == null || raw.length == 0) {
         return Status.NOT_FOUND;
       }
