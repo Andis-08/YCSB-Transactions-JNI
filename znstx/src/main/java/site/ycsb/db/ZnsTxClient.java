@@ -32,7 +32,9 @@ public class ZnsTxClient extends DB {
   private static final String PROP_DURABILITY = "znstx.durability";
   private static final String PROP_RECOVERY = "znstx.recovery";
   private static final String PROP_NODE_CHECKPOINT = "znstx.checkpoint";
+  private static final String PROP_BATCHED_NODE_CHECKPOINT = "znstx.batched_checkpoint";
   private static final String PROP_PERIODIC_GC = "znstx.gc";
+  private static final String PROP_EVAL = "znstx.eval";
   private static final String PROP_READ_BUFFER_BYTES = "znstx.readbuffer.bytes";
 
   private static final int DEFAULT_READ_BUFFER_BYTES = 64 * 1024;
@@ -55,7 +57,8 @@ public class ZnsTxClient extends DB {
   }
 
   private static native int nativeInitTx(int isolationLevel, int durabilityLevel, boolean enableRecovery,
-      boolean enableNodeCheckpointing, boolean enablePeriodicGc);
+      boolean enableNodeCheckpointing, boolean enablePeriodicGc, boolean enableEval,
+      boolean enableBatchedNodeCheckpoint);
   private static native void nativeCleanTx();
   private static native int nativeBeginTx();
   private static native int nativeEndTx();
@@ -100,12 +103,15 @@ public class ZnsTxClient extends DB {
     boolean enableNodeCheckpointing =
         Boolean.parseBoolean(props.getProperty(PROP_NODE_CHECKPOINT, "false"));
     boolean enablePeriodicGc = Boolean.parseBoolean(props.getProperty(PROP_PERIODIC_GC, "false"));
+    boolean enableEval = Boolean.parseBoolean(props.getProperty(PROP_EVAL, "false"));
+    boolean enableBatchedNodeCheckpoint =
+        Boolean.parseBoolean(props.getProperty(PROP_BATCHED_NODE_CHECKPOINT, "false"));
     readBufferBytes = parsePositiveInt(props.getProperty(PROP_READ_BUFFER_BYTES), DEFAULT_READ_BUFFER_BYTES);
 
     synchronized (INIT_LOCK) {
       if (!nativeInitialized) {
         int rc = nativeInitTx(isolationLevel, durabilityLevel, enableRecovery,
-            enableNodeCheckpointing, enablePeriodicGc);
+            enableNodeCheckpointing, enablePeriodicGc, enableEval, enableBatchedNodeCheckpoint);
         if (rc != 0) {
           throw new DBException("nativeInitTx failed with rc=" + rc);
         }
