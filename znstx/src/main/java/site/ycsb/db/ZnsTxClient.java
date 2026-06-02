@@ -35,7 +35,10 @@ public class ZnsTxClient extends DB {
   private static final String PROP_BATCHED_NODE_CHECKPOINT = "znstx.batched_checkpoint";
   private static final String PROP_PERIODIC_GC = "znstx.gc";
   private static final String PROP_EVAL = "znstx.eval";
+  private static final String PROP_DEBUG = "znstx.debug";
   private static final String PROP_READ_BUFFER_BYTES = "znstx.readbuffer.bytes";
+  private static final String PROP_DRIVE_COUNT = "znstx.drive";
+  private static final String PROP_DEBUG_PROPS = "znstx.debug.props";
 
   private static final int DEFAULT_READ_BUFFER_BYTES = 64 * 1024;
 
@@ -49,6 +52,9 @@ public class ZnsTxClient extends DB {
   private static final Object INIT_LOCK = new Object();
   private static boolean nativeInitialized = false;
   private static int clientRefCount = 0;
+  private static boolean shutdownHookRegistered = false;
+  private static boolean debugProps = false;
+  private static boolean insertShapeLogged = false;
 
   private int readBufferBytes = DEFAULT_READ_BUFFER_BYTES;
 
@@ -58,7 +64,7 @@ public class ZnsTxClient extends DB {
 
   private static native int nativeInitTx(int isolationLevel, int durabilityLevel, boolean enableRecovery,
       boolean enableNodeCheckpointing, boolean enablePeriodicGc, boolean enableEval,
-      boolean enableBatchedNodeCheckpoint);
+      boolean enableBatchedNodeCheckpoint, boolean enableDebug, int driveCount);
   private static native void nativeCleanTx();
   private static native int nativeBeginTx();
   private static native int nativeEndTx();
@@ -104,18 +110,32 @@ public class ZnsTxClient extends DB {
         Boolean.parseBoolean(props.getProperty(PROP_NODE_CHECKPOINT, "false"));
     boolean enablePeriodicGc = Boolean.parseBoolean(props.getProperty(PROP_PERIODIC_GC, "false"));
     boolean enableEval = Boolean.parseBoolean(props.getProperty(PROP_EVAL, "false"));
+    boolean enableDebug = Boolean.parseBoolean(props.getProperty(PROP_DEBUG, "false"));
     boolean enableBatchedNodeCheckpoint =
         Boolean.parseBoolean(props.getProperty(PROP_BATCHED_NODE_CHECKPOINT, "false"));
     readBufferBytes = parsePositiveInt(props.getProperty(PROP_READ_BUFFER_BYTES), DEFAULT_READ_BUFFER_BYTES);
+    int driveCount = parsePositiveInt(props.getProperty(PROP_DRIVE_COUNT), 0);
+    debugProps = Boolean.parseBoolean(props.getProperty(PROP_DEBUG_PROPS, "false"));
+
+    if (debugProps) {
+      System.err.println("[ZNSTX_DEBUG] raw fieldCount=" + props.getProperty("fieldCount")
+          + " fieldcount=" + props.getProperty("fieldcount")
+          + " fieldlength=" + props.getProperty("fieldlength")
+          + " recordcount=" + props.getProperty("recordcount")
+          + " operationcount=" + props.getProperty("operationcount")
+          + " workload=" + props.getProperty("workload"));
+    }
 
     synchronized (INIT_LOCK) {
       if (!nativeInitialized) {
         int rc = nativeInitTx(isolationLevel, durabilityLevel, enableRecovery,
-            enableNodeCheckpointing, enablePeriodicGc, enableEval, enableBatchedNodeCheckpoint);
+            enableNodeCheckpointing, enablePeriodicGc, enableEval, enableBatchedNodeCheckpoint,
+            enableDebug, driveCount);
         if (rc != 0) {
           throw new DBException("nativeInitTx failed with rc=" + rc);
         }
         nativeInitialized = true;
+        registerShutdownHookIfNeeded();
       }
       clientRefCount++;
     }
@@ -127,11 +147,23 @@ public class ZnsTxClient extends DB {
       if (clientRefCount > 0) {
         clientRefCount--;
       }
-      if (nativeInitialized && clientRefCount == 0) {
-        nativeCleanTx();
-        nativeInitialized = false;
-      }
     }
+  }
+
+  private static void registerShutdownHookIfNeeded() {
+    if (shutdownHookRegistered) {
+      return;
+    }
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      synchronized (INIT_LOCK) {
+        if (nativeInitialized) {
+          nativeCleanTx();
+          nativeInitialized = false;
+          clientRefCount = 0;
+        }
+      }
+    }, "znstx-cleanup-shutdown-hook"));
+    shutdownHookRegistered = true;
   }
 
   @Override
@@ -255,6 +287,7 @@ public class ZnsTxClient extends DB {
   @Override
   public Status insert(String table, String key, Map<String, ByteIterator> values) {
     String objKey = objectKey(table, key);
+    maybeLogInsertShape(values);
     byte[] payload = serializeFields(values);
     try {
       if (nativePutObj(objKey, payload) == 0) {
@@ -339,6 +372,25 @@ public class ZnsTxClient extends DB {
       out.write(fieldValue, 0, fieldValue.length);
     }
     return out.toByteArray();
+  }
+
+  private static void maybeLogInsertShape(Map<String, ByteIterator> values) {
+    if (!debugProps || insertShapeLogged) {
+      return;
+    }
+    synchronized (INIT_LOCK) {
+      if (insertShapeLogged) {
+        return;
+      }
+      int fields = values.size();
+      long totalValueBytes = 0;
+      for (Map.Entry<String, ByteIterator> entry : values.entrySet()) {
+        totalValueBytes += entry.getValue().bytesLeft();
+      }
+      System.err.println("[ZNSTX_DEBUG] first insert fields=" + fields
+          + " totalValueBytes=" + totalValueBytes);
+      insertShapeLogged = true;
+    }
   }
 
 }
