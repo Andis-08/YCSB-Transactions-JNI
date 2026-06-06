@@ -35,6 +35,7 @@ public class ZnsTxClient extends DB {
   private static final String PROP_BATCHED_NODE_CHECKPOINT = "znstx.batched_checkpoint";
   private static final String PROP_PERIODIC_GC = "znstx.gc";
   private static final String PROP_EVAL = "znstx.eval";
+  private static final String PROP_MEM = "znstx.mem";
   private static final String PROP_DEBUG = "znstx.debug";
   private static final String PROP_READ_BUFFER_BYTES = "znstx.readbuffer.bytes";
   private static final String PROP_DRIVE_COUNT = "znstx.drive";
@@ -64,7 +65,7 @@ public class ZnsTxClient extends DB {
 
   private static native int nativeInitTx(int isolationLevel, int durabilityLevel, boolean enableRecovery,
       boolean enableNodeCheckpointing, boolean enablePeriodicGc, boolean enableEval,
-      boolean enableBatchedNodeCheckpoint, boolean enableDebug, int driveCount);
+      boolean enableBatchedNodeCheckpoint, boolean enableDebug, boolean enableMem, int driveCount);
   private static native void nativeCleanTx();
   private static native int nativeBeginTx();
   private static native int nativeEndTx();
@@ -101,6 +102,12 @@ public class ZnsTxClient extends DB {
   }
 
   @Override
+  public long validate() throws DBException {
+    // Closed-economy / YCSB query validation is not implemented for ZNS Tx.
+    return 0;
+  }
+
+  @Override
   public void init() throws DBException {
     Properties props = getProperties();
     int isolationLevel = parseIsolation(props.getProperty(PROP_ISOLATION, "si"));
@@ -110,6 +117,7 @@ public class ZnsTxClient extends DB {
         Boolean.parseBoolean(props.getProperty(PROP_NODE_CHECKPOINT, "false"));
     boolean enablePeriodicGc = Boolean.parseBoolean(props.getProperty(PROP_PERIODIC_GC, "false"));
     boolean enableEval = Boolean.parseBoolean(props.getProperty(PROP_EVAL, "false"));
+    boolean enableMem = Boolean.parseBoolean(props.getProperty(PROP_MEM, "false"));
     boolean enableDebug = Boolean.parseBoolean(props.getProperty(PROP_DEBUG, "false"));
     boolean enableBatchedNodeCheckpoint =
         Boolean.parseBoolean(props.getProperty(PROP_BATCHED_NODE_CHECKPOINT, "false"));
@@ -130,7 +138,7 @@ public class ZnsTxClient extends DB {
       if (!nativeInitialized) {
         int rc = nativeInitTx(isolationLevel, durabilityLevel, enableRecovery,
             enableNodeCheckpointing, enablePeriodicGc, enableEval, enableBatchedNodeCheckpoint,
-            enableDebug, driveCount);
+            enableDebug, enableMem, driveCount);
         if (rc != 0) {
           throw new DBException("nativeInitTx failed with rc=" + rc);
         }
@@ -143,6 +151,11 @@ public class ZnsTxClient extends DB {
 
   @Override
   public void cleanup() throws DBException {
+    // Reap any tx this thread left active (e.g. last op returned false without
+    // commit). beginTx self-heal only fires on the next start(), which never
+    // comes at thread end; an orphan here would pin getOldestActiveSnapshotTs()
+    // and stall GC/cleanup for other threads until teardown. Idempotent.
+    nativeAbortTx();
     synchronized (INIT_LOCK) {
       if (clientRefCount > 0) {
         clientRefCount--;
@@ -171,8 +184,8 @@ public class ZnsTxClient extends DB {
     String objKey = objectKey(table, key);
     try {
       byte[] raw = nativeGetObj(objKey, readBufferBytes);
-      // nativeAbortTx(); // End the read-only transaction after the read
       if (raw == null || raw.length == 0) {
+        abortIfActive();
         return Status.NOT_FOUND;
       }
 
@@ -213,11 +226,13 @@ public class ZnsTxClient extends DB {
       }
 
       if (!foundAny) {
+        abortIfActive();
         return Status.NOT_FOUND;
       }
 
       return Status.OK;
     } catch (RuntimeException e) {
+      abortIfActive();
       return Status.ERROR;
     }
   }
@@ -308,6 +323,10 @@ public class ZnsTxClient extends DB {
 
   private static String objectKey(String table, String key) {
     return table + ":" + key;
+  }
+
+  private void abortIfActive() {
+    nativeAbortTx();
   }
 
   private static int parseIsolation(String value) throws DBException {
