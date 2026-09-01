@@ -49,6 +49,7 @@ public class ZnsTxClient extends DB {
 
   private static final int DURABILITY_DEFAULT = 0;
   private static final int DURABILITY_REPLICA = 1;
+  private static final int DURABILITY_RAID1 = 2;
 
   private static final Object INIT_LOCK = new Object();
   private static boolean nativeInitialized = false;
@@ -357,6 +358,9 @@ public class ZnsTxClient extends DB {
     if ("replica".equals(normalized) || "selectivereplica".equals(normalized)) {
       return DURABILITY_REPLICA;
     }
+    if ("raid1".equals(normalized) || "mirror".equals(normalized)) {
+      return DURABILITY_RAID1;
+    }
     throw new DBException("Unknown durability level: " + value);
   }
 
@@ -413,3 +417,4 @@ public class ZnsTxClient extends DB {
   }
 
 }
+
