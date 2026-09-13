@@ -77,8 +77,10 @@ public class ClientThread implements Runnable {
     measurements = Measurements.getMeasurements();
     spinSleep = Boolean.valueOf(this.props.getProperty("spin.sleep", "false"));
     this.completeLatch = completeLatch;
-    this.maxRetryCount = DEFAULT_RETRY_COUNT;
-    this.waitTimeBeforeRetry = DEFAULT_WAIT_TIME_BEFORE_RETRY;
+    this.maxRetryCount = Integer.parseInt(
+        this.props.getProperty("znstx.retry.maxcount", String.valueOf(DEFAULT_RETRY_COUNT)));
+    this.waitTimeBeforeRetry = Integer.parseInt(
+        this.props.getProperty("znstx.retry.waitms", String.valueOf(DEFAULT_WAIT_TIME_BEFORE_RETRY)));
   }
 
   public void setThreadId(final int threadId) {
