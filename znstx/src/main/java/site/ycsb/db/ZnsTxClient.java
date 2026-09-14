@@ -35,7 +35,6 @@ public class ZnsTxClient extends DB {
   private static final String PROP_BATCHED_NODE_CHECKPOINT = "znstx.batched_checkpoint";
   private static final String PROP_PERIODIC_GC = "znstx.gc";
   private static final String PROP_EVAL = "znstx.eval";
-  private static final String PROP_MEM = "znstx.mem";
   private static final String PROP_DEBUG = "znstx.debug";
   private static final String PROP_READ_BUFFER_BYTES = "znstx.readbuffer.bytes";
   private static final String PROP_DRIVE_COUNT = "znstx.drive";
@@ -64,9 +63,14 @@ public class ZnsTxClient extends DB {
     System.loadLibrary("zns_tx_jni");
   }
 
+  // Signature must match the JNI handler in jni/zns_tx_jni.cpp (9 args), which is
+  // shared with CobraBench's ZnsTxClient. JNI binds by name and does not check the
+  // signature, so an extra arg here does not fail to link -- it shifts every later
+  // arg by one slot. A stray boolean before driveCount made the native side read
+  // that boolean as the drive count, i.e. always 0 = "use every probed drive".
   private static native int nativeInitTx(int isolationLevel, int durabilityLevel, boolean enableRecovery,
       boolean enableNodeCheckpointing, boolean enablePeriodicGc, boolean enableEval,
-      boolean enableBatchedNodeCheckpoint, boolean enableDebug, boolean enableMem, int driveCount);
+      boolean enableBatchedNodeCheckpoint, boolean enableDebug, int driveCount);
   private static native void nativeCleanTx();
   private static native int nativeBeginTx();
   private static native int nativeEndTx();
@@ -118,7 +122,6 @@ public class ZnsTxClient extends DB {
         Boolean.parseBoolean(props.getProperty(PROP_NODE_CHECKPOINT, "false"));
     boolean enablePeriodicGc = Boolean.parseBoolean(props.getProperty(PROP_PERIODIC_GC, "false"));
     boolean enableEval = Boolean.parseBoolean(props.getProperty(PROP_EVAL, "false"));
-    boolean enableMem = Boolean.parseBoolean(props.getProperty(PROP_MEM, "false"));
     boolean enableDebug = Boolean.parseBoolean(props.getProperty(PROP_DEBUG, "false"));
     boolean enableBatchedNodeCheckpoint =
         Boolean.parseBoolean(props.getProperty(PROP_BATCHED_NODE_CHECKPOINT, "false"));
@@ -139,7 +142,7 @@ public class ZnsTxClient extends DB {
       if (!nativeInitialized) {
         int rc = nativeInitTx(isolationLevel, durabilityLevel, enableRecovery,
             enableNodeCheckpointing, enablePeriodicGc, enableEval, enableBatchedNodeCheckpoint,
-            enableDebug, enableMem, driveCount);
+            enableDebug, driveCount);
         if (rc != 0) {
           throw new DBException("nativeInitTx failed with rc=" + rc);
         }
