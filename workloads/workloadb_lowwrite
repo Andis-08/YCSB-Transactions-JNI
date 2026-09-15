@@ -1,0 +1,35 @@
+# Read-heavy variant of workloadB for the Fig. 10 GC-isolation measurement.
+#
+#   Read/update ratio: 99/1   (workloadB is 95/5)
+#   Request distribution: uniform
+#
+# Why a separate file rather than a tuned workloadB: the quantity that governs the GC
+# read-isolation effect is the dataset rewrite time, recordcount / update rate. While the
+# collecting drives are out of the write rotation, every update moves a record onto a drive
+# that is *not* collecting, so once the workload has rewritten its whole key set there is
+# nothing left on the collecting drive to isolate. At 95/5 and 32 threads that takes ~95 s,
+# which is shorter than the measurement window; at 99/1 it is ~500 s, i.e. longer than the
+# window, so the effect does not decay away inside it.
+#
+# 1% rather than 0%: a read-only workload also freezes the live set, but it stops the commit
+# stream that supplies GC with garbage and drives the block-cache eviction pass, and it makes
+# the write-side throughput columns read zero.
+#
+# The name carries no digit on purpose. eval/fig10/parse_fig10_gc.py matches log file names
+# with `(?P<workload>[a-z_]+?)`, so a name like "workloadb1" fails the match and the parser
+# skips the run silently.
+#
+# recordcount and operationcount are placeholders: eval/fig10 passes both with -p.
+
+recordcount=1000
+operationcount=1000
+workload=site.ycsb.workloads.CoreWorkload
+
+readallfields=true
+
+readproportion=0.99
+updateproportion=0.01
+scanproportion=0
+insertproportion=0
+
+requestdistribution=uniform
