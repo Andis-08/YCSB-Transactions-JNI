@@ -40,6 +40,8 @@ public class ZnsTxClient extends DB {
   private static final String PROP_DRIVE_COUNT = "znstx.drive";
   private static final String PROP_DEBUG_PROPS = "znstx.debug.props";
 
+  // Fallback read cap, used only when znstx.readbuffer.bytes is unset and the workload's
+  // largest record cannot be derived from its properties (histogram field lengths).
   private static final int DEFAULT_READ_BUFFER_BYTES = 64 * 1024;
 
   private static final int ISOLATION_SI = 0;
@@ -56,6 +58,7 @@ public class ZnsTxClient extends DB {
   private static boolean shutdownHookRegistered = false;
   private static boolean debugProps = false;
   private static boolean insertShapeLogged = false;
+  private static boolean readBufferLogged = false;
 
   private int readBufferBytes = DEFAULT_READ_BUFFER_BYTES;
 
@@ -125,7 +128,7 @@ public class ZnsTxClient extends DB {
     boolean enableDebug = Boolean.parseBoolean(props.getProperty(PROP_DEBUG, "false"));
     boolean enableBatchedNodeCheckpoint =
         Boolean.parseBoolean(props.getProperty(PROP_BATCHED_NODE_CHECKPOINT, "false"));
-    readBufferBytes = parsePositiveInt(props.getProperty(PROP_READ_BUFFER_BYTES), DEFAULT_READ_BUFFER_BYTES);
+    readBufferBytes = resolveReadBufferBytes(props);
     int driveCount = parsePositiveInt(props.getProperty(PROP_DRIVE_COUNT), 0);
     debugProps = Boolean.parseBoolean(props.getProperty(PROP_DEBUG_PROPS, "false"));
 
@@ -365,6 +368,52 @@ public class ZnsTxClient extends DB {
       return DURABILITY_RAID1;
     }
     throw new DBException("Unknown durability level: " + value);
+  }
+
+  /**
+   * The cap nativeGetObj reads up to. An explicit znstx.readbuffer.bytes wins; otherwise it is
+   * the serialized size of the largest record the workload can write, computed from the same
+   * properties CoreWorkload builds records from and the same layout serializeFields() writes.
+   *
+   * It must not undercount: an object larger than the cap comes back truncated and read()
+   * parses it as NOT_FOUND. Exact is safe because a record never grows -- update() merges the
+   * changed fields into the full record -- and since nativeGetObj reuses a per-thread buffer,
+   * the cap no longer costs anything per read, so there is nothing to gain from headroom.
+   */
+  private static int resolveReadBufferBytes(Properties props) throws DBException {
+    String explicit = props.getProperty(PROP_READ_BUFFER_BYTES);
+    int bytes;
+    String source;
+    if (explicit != null && !explicit.trim().isEmpty()) {
+      bytes = parsePositiveInt(explicit, DEFAULT_READ_BUFFER_BYTES);
+      source = "explicit";
+    } else if ("histogram".equals(props.getProperty("fieldlengthdistribution", "constant"))) {
+      // The longest field is in the histogram file, not in the properties.
+      bytes = DEFAULT_READ_BUFFER_BYTES;
+      source = "fallback: histogram field lengths; set " + PROP_READ_BUFFER_BYTES;
+    } else {
+      // constant, uniform and zipfian all top out at fieldlength.
+      int fieldCount = parsePositiveInt(props.getProperty("fieldCount"), 10);
+      int fieldLength = parsePositiveInt(props.getProperty("fieldlength"), 100);
+      String prefix = props.getProperty("fieldnameprefix", "field");
+      long total = 0;
+      for (int i = 0; i < fieldCount; i++) {
+        total += 4L + (prefix + i).getBytes(StandardCharsets.UTF_8).length + 4L + fieldLength;
+      }
+      if (total > Integer.MAX_VALUE) {
+        throw new DBException("Record of " + total + " bytes exceeds the JNI read cap; "
+            + "fieldCount=" + fieldCount + " fieldlength=" + fieldLength);
+      }
+      bytes = (int) total;
+      source = "auto: fieldCount=" + fieldCount + " fieldlength=" + fieldLength;
+    }
+    synchronized (INIT_LOCK) {
+      if (!readBufferLogged) {
+        System.err.println("[ZNSTX_CONFIG] readbuffer=" + bytes + " bytes (" + source + ")");
+        readBufferLogged = true;
+      }
+    }
+    return bytes;
   }
 
   private static int parsePositiveInt(String value, int defaultValue) {
